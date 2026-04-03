@@ -104,7 +104,7 @@ def message_part_to_text(part):
     if hasattr(part, "get_content"):
         try:
             content = part.get_content()
-        except (LookupError, UnicodeDecodeError):
+        except LookupError, UnicodeDecodeError:
             content = None
         if isinstance(content, str):
             return content
@@ -226,9 +226,7 @@ def build_reply_template(message, local_addresses=None):
 
     headers = [f"To: {reply_to}"]
     local_address_set = set(local_addresses or get_local_addresses())
-    reply_to_addresses = {
-        address.casefold() for _, address in getaddresses([reply_to]) if address
-    }
+    reply_to_addresses = {address.casefold() for _, address in getaddresses([reply_to]) if address}
     cc_addresses = normalize_addresses(
         [message.get("To", ""), message.get("Cc", "")],
         exclude=local_address_set | reply_to_addresses,
@@ -344,7 +342,9 @@ def create_parser():
         help="A URL or file containing one raw email message or a single-message mbox",
     )
     parser.add_argument("--resume", metavar="FILE", help="Re-open an existing drafted reply")
-    parser.add_argument("--reply", action="store_true", help="Send the reply via git send-email on save")
+    parser.add_argument(
+        "--reply", action="store_true", help="Send the reply via git send-email on save"
+    )
     parser.add_argument(
         "--line-length",
         "--len",
