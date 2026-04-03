@@ -1,176 +1,422 @@
 #!/usr/bin/env python3
 
+from datetime import datetime
+from email import policy
+from email.parser import BytesParser
+from email.utils import formataddr, getaddresses
+from pathlib import Path
 import argparse
-import urllib.request
-import urllib.error
-import email
-import subprocess
+import hashlib
+import mailbox
 import os
-import sys
 import re
-import datetime
+import shlex
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
 
-def get_mbox_data(source):
-    """Fetches mbox data from a URL or reads from a local file."""
 
-    if source.startswith('http://') or source.startswith('https://'):
+USER_AGENT = "rmbox/0.1"
+DEFAULT_LINE_LENGTH = 100
+HEADER_NEWLINE_RE = re.compile(r"[\r\n]+")
+
+
+class RmboxError(Exception):
+    """Raised when rmbox cannot complete the requested operation."""
+
+
+def sanitize_header_value(value):
+    """Collapse header newlines and surrounding whitespace."""
+
+    return HEADER_NEWLINE_RE.sub(" ", value or "").strip()
+
+
+def fetch_source_bytes(source):
+    """Fetch message bytes from a URL or local file."""
+
+    if source.startswith(("http://", "https://")):
         print(f"Fetching from URL: {source}...")
+        request = urllib.request.Request(source, headers={"User-Agent": USER_AGENT})
         try:
-            req = urllib.request.Request(
-                source,
-                headers={'User-Agent': 'rmbox/0.1-init'}
+            with urllib.request.urlopen(request) as response:
+                return response.read()
+        except urllib.error.URLError as error:
+            raise RmboxError(f"unable to fetch URL '{source}': {error}") from error
+
+    source_path = Path(source).expanduser()
+    print(f"Reading from file: {source_path}...")
+    if not source_path.exists():
+        raise RmboxError(f"file '{source_path}' does not exist")
+
+    try:
+        return source_path.read_bytes()
+    except OSError as error:
+        raise RmboxError(f"unable to read file '{source_path}': {error}") from error
+
+
+def parse_messages_from_bytes(data):
+    """Parse either a raw email message or an mbox payload."""
+
+    if not data.strip():
+        raise RmboxError("source is empty")
+
+    if data.startswith(b"From "):
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            temp_file.write(data)
+            temp_path = Path(temp_file.name)
+
+        message_box = None
+        try:
+            message_box = mailbox.mbox(
+                temp_path,
+                factory=lambda handle: BytesParser(policy=policy.default).parse(handle),
+                create=False,
             )
-            with urllib.request.urlopen(req) as response:
-                return response.read().decode('utf-8', errors='replace')
-        except urllib.error.URLError as e:
-            print(f"Error fetching URL: {e}")
-            sys.exit(1)
-    else:
-        print(f"Reading from file: {source}...")
-        if not os.path.exists(source):
-            print(f"Error: File '{source}' does not exist.")
-            sys.exit(1)
+            return list(message_box)
+        finally:
+            if message_box is not None:
+                message_box.close()
+            temp_path.unlink(missing_ok=True)
+
+    parser = BytesParser(policy=policy.default)
+    return [parser.parsebytes(data)]
+
+
+def load_message_from_source(source):
+    """Load exactly one message from the requested source."""
+
+    messages = parse_messages_from_bytes(fetch_source_bytes(source))
+    if not messages:
+        raise RmboxError("source does not contain any messages")
+    if len(messages) > 1:
+        raise RmboxError(
+            "source contains multiple messages; rmbox replies to one message at a time, "
+            "so provide a raw message or a single-message mbox"
+        )
+    return messages[0]
+
+
+def message_part_to_text(part):
+    """Decode a text message part to a Unicode string."""
+
+    if hasattr(part, "get_content"):
         try:
-            with open(source, 'r', encoding='utf-8', errors='replace') as f:
-                return f.read()
-        except Exception as e:
-            print(f"Error reading file: {e}")
-            sys.exit(1)
+            content = part.get_content()
+        except (LookupError, UnicodeDecodeError):
+            content = None
+        if isinstance(content, str):
+            return content
 
-def build_reply_template(raw_email):
-    """Parses original email and generates a reply template. Returns (template, subject)."""
+    payload = part.get_payload(decode=True)
+    if payload is None:
+        raw_payload = part.get_payload()
+        if isinstance(raw_payload, str):
+            return raw_payload
+        return ""
 
-    headers = []
-    msg = email.message_from_string(raw_email)
-    headers.append(f"To: {msg.get('From', '')}")
-    
-    ccs = []
-    if msg.get('To'):
-        ccs.append(msg.get('To').replace('\n', ' ').replace('\r', '').strip())
-    if msg.get('Cc'):
-        ccs.append(msg.get('Cc').replace('\n', ' ').replace('\r', '').strip())
-        
-    if ccs:
-        headers.append(f"Cc: {', '.join(ccs)}")
-        
-    subj = msg.get('Subject', '')
-    if not subj.lower().startswith('re:'):
-        subj = 'Re: ' + subj
-    clean_subj = subj.replace(chr(10), '').replace(chr(13), '')
-    headers.append(f"Subject: {clean_subj}")
-    
-    msg_id = msg.get('Message-ID', '')
-    headers.append(f"In-Reply-To: {msg_id}")
-    
-    refs = msg.get('References', '')
-    headers.append(f"References: {refs} {msg_id}" if refs else f"References: {msg_id}")
-    
-    payload = ""
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_type() == 'text/plain':
-                payload = part.get_payload(decode=True).decode('utf-8', 'replace')
-                break
+    charset = part.get_content_charset() or "utf-8"
+    try:
+        return payload.decode(charset, errors="replace")
+    except LookupError:
+        return payload.decode("utf-8", errors="replace")
+
+
+def extract_plain_text_body(message):
+    """Return the visible text/plain body, skipping attachments."""
+
+    if not message.is_multipart():
+        if message.get_content_type() == "text/plain":
+            return message_part_to_text(message)
+        return ""
+
+    for part in message.walk():
+        if part.get_content_maintype() == "multipart":
+            continue
+        if part.get_content_type() != "text/plain":
+            continue
+        if part.get_content_disposition() == "attachment":
+            continue
+        return message_part_to_text(part)
+
+    return ""
+
+
+def quote_body(body):
+    """Quote message text in a plain-text mail style."""
+
+    if not body:
+        return ""
+    return "\n".join(f"> {line}" for line in body.splitlines())
+
+
+def normalize_addresses(header_values, exclude=None):
+    """Parse, sanitize, deduplicate, and filter header addresses."""
+
+    excluded = {value.casefold() for value in (exclude or set())}
+    seen = set()
+    result = []
+
+    for display_name, address in getaddresses(header_values):
+        clean_address = sanitize_header_value(address)
+        if not clean_address:
+            continue
+
+        normalized = clean_address.casefold()
+        if normalized in excluded or normalized in seen:
+            continue
+
+        seen.add(normalized)
+        clean_name = sanitize_header_value(display_name)
+        result.append(formataddr((clean_name, clean_address)))
+
+    return result
+
+
+def get_local_addresses():
+    """Best-effort discovery of local sender addresses for CC filtering."""
+
+    candidates = []
+    email_env = os.environ.get("EMAIL")
+    if email_env:
+        candidates.append(email_env)
+
+    for config_key in ("user.email", "sendemail.from"):
+        try:
+            result = subprocess.run(
+                ["git", "config", "--get-all", config_key],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            continue
+
+        if result.returncode != 0:
+            continue
+
+        candidates.extend(line.strip() for line in result.stdout.splitlines() if line.strip())
+
+    return {address.casefold() for _, address in getaddresses(candidates) if address}
+
+
+def build_references(existing_references, message_id):
+    """Build a References header while preserving existing order."""
+
+    ordered_ids = []
+    seen = set()
+    for token in sanitize_header_value(existing_references).split():
+        if token not in seen:
+            ordered_ids.append(token)
+            seen.add(token)
+
+    if message_id and message_id not in seen:
+        ordered_ids.append(message_id)
+
+    return " ".join(ordered_ids)
+
+
+def build_reply_template(message, local_addresses=None):
+    """Generate a reply draft and return (template, subject, message_id)."""
+
+    reply_to = sanitize_header_value(message.get("From", ""))
+    if not reply_to:
+        raise RmboxError("source message is missing a From header")
+
+    headers = [f"To: {reply_to}"]
+    local_address_set = set(local_addresses or get_local_addresses())
+    reply_to_addresses = {
+        address.casefold() for _, address in getaddresses([reply_to]) if address
+    }
+    cc_addresses = normalize_addresses(
+        [message.get("To", ""), message.get("Cc", "")],
+        exclude=local_address_set | reply_to_addresses,
+    )
+    if cc_addresses:
+        headers.append(f"Cc: {', '.join(cc_addresses)}")
+
+    original_subject = sanitize_header_value(message.get("Subject", ""))
+    if not original_subject:
+        original_subject = "(no subject)"
+    reply_subject = original_subject
+    if not reply_subject.lower().startswith("re:"):
+        reply_subject = f"Re: {reply_subject}"
+    headers.append(f"Subject: {reply_subject}")
+
+    message_id = sanitize_header_value(message.get("Message-ID", ""))
+    if message_id:
+        headers.append(f"In-Reply-To: {message_id}")
+        references = build_references(message.get("References", ""), message_id)
+        if references:
+            headers.append(f"References: {references}")
+
+    quoted_body = quote_body(extract_plain_text_body(message))
+    template = "\n".join(headers) + "\n\n"
+    if quoted_body:
+        template += quoted_body + "\n"
+
+    return template, reply_subject, message_id
+
+
+def make_draft_filename(subject, message_id=""):
+    """Create a stable, filesystem-safe draft filename."""
+
+    safe_subject = re.sub(r"[^A-Za-z0-9]+", "-", subject).strip("-") or "reply"
+    if message_id:
+        unique_token = hashlib.sha1(message_id.encode("utf-8")).hexdigest()[:10]
     else:
-        payload = msg.get_payload(decode=True).decode('utf-8', 'replace')
+        unique_token = datetime.now().strftime("%H%M%S")
 
-    quoted_body = "\n".join(f"> {line}" for line in payload.splitlines())
-    
-    template = "\n".join(headers) + "\n\n" + quoted_body + "\n"
-    return template, clean_subj
+    max_subject_length = max(1, 100 - len(unique_token) - len("-.eml"))
+    safe_subject = safe_subject[:max_subject_length].rstrip("-") or "reply"
+    return f"{safe_subject}-{unique_token}.eml"
 
-def get_save_directory():
-    """Generates and ensures the ~/.rmbox/YYYY-MM-DD/ directory exists"""
 
-    today = datetime.datetime.now().strftime("%Y-%m-%d")
-    rmbox_dir = os.path.expanduser(f"~/.rmbox/{today}")
-    os.makedirs(rmbox_dir, exist_ok=True)
-    return rmbox_dir
+def get_save_directory(today=None):
+    """Create and return the per-day draft directory under ~/.rmbox/."""
 
-def main():
-    parser = argparse.ArgumentParser(description="Reply to mbox patches easily.")
-    parser.add_argument("source", nargs="?", help="A URL to a raw mbox file or a local mbox file")
+    date_token = today or datetime.now().strftime("%Y-%m-%d")
+    draft_dir = Path.home() / ".rmbox" / date_token
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    return draft_dir
+
+
+def choose_draft_path(save_dir, subject, message_id):
+    """Return a unique draft path for the generated reply."""
+
+    base_name = Path(make_draft_filename(subject, message_id)).stem
+    target_path = save_dir / f"{base_name}.eml"
+    counter = 1
+    while target_path.exists():
+        target_path = save_dir / f"{base_name}-{counter}.eml"
+        counter += 1
+    return target_path
+
+
+def read_file_signature(file_path):
+    """Return a stable content signature for change detection."""
+
+    digest = hashlib.sha256()
+    digest.update(file_path.read_bytes())
+    return digest.hexdigest()
+
+
+def build_editor_command(editor_value, line_length, target_path):
+    """Build the editor command for the current environment."""
+
+    editor = editor_value or os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vim"
+    try:
+        command = shlex.split(editor)
+    except ValueError as error:
+        raise RmboxError(f"unable to parse editor command '{editor}': {error}") from error
+
+    if not command:
+        raise RmboxError("editor command is empty")
+
+    executable = Path(command[0]).name.lower()
+    if "vim" in executable:
+        command.extend(["-c", "set filetype=mail", "-c", f"set textwidth={line_length}"])
+    elif executable == "nano":
+        command.extend(["-r", str(line_length)])
+
+    command.append(str(target_path))
+    return command
+
+
+def validate_resume_path(resume_path):
+    """Validate that a resume target looks like an rmbox draft."""
+
+    if not resume_path.exists():
+        raise RmboxError(f"draft '{resume_path}' does not exist")
+    if resume_path.suffix.lower() != ".eml":
+        raise RmboxError(f"draft '{resume_path}' is not an .eml file")
+    return resume_path
+
+
+def create_parser():
+    """Create the CLI argument parser."""
+
+    parser = argparse.ArgumentParser(description="Draft replies to email patches easily.")
+    parser.add_argument(
+        "source",
+        nargs="?",
+        help="A URL or file containing one raw email message or a single-message mbox",
+    )
     parser.add_argument("--resume", metavar="FILE", help="Re-open an existing drafted reply")
     parser.add_argument("--reply", action="store_true", help="Send the reply via git send-email on save")
-    parser.add_argument("--len", type=int, default=80, help="Maximum line length while composing (default: 80)")
-    
-    args = parser.parse_args()
-    
+    parser.add_argument(
+        "--line-length",
+        "--len",
+        dest="line_length",
+        type=int,
+        default=DEFAULT_LINE_LENGTH,
+        help=f"Maximum line length while composing (default: {DEFAULT_LINE_LENGTH})",
+    )
+    return parser
+
+
+def main(argv=None):
+    parser = create_parser()
+    args = parser.parse_args(argv)
+
     if not args.source and not args.resume:
         parser.error("You must provide either a source URL/file or use --resume FILE.")
     if args.source and args.resume:
         parser.error("Cannot use both a source and --resume at the same time.")
+    if args.line_length < 1:
+        parser.error("--line-length must be a positive integer.")
 
     is_new_draft = False
 
-    if args.resume:
-        target_path = os.path.expanduser(args.resume)
-        if not os.path.exists(target_path):
-            print(f"Error: Draft '{target_path}' does not exist.")
-            sys.exit(1)
-        print(f"Resuming draft: {target_path}")
-    else:
-        # Fetch, parse and generate new draft
-        is_new_draft = True
-        raw_email = get_mbox_data(args.source)
-        template, raw_subj = build_reply_template(raw_email)
-        
-        # Create safe filename and directory
-        safe_name = re.sub(r'[^A-Za-z0-9]+', '-', raw_subj).strip('-')
-        if not safe_name:
-            safe_name = "reply"
-        safe_name = safe_name[:100] + ".eml"
-        
-        save_dir = get_save_directory()
-        target_path = os.path.join(save_dir, safe_name)
-        
-        # Avoid overwriting existing drafts with the exact same subject today
-        base_name = safe_name[:-4]
-        counter = 1
-        while os.path.exists(target_path):
-            target_path = os.path.join(save_dir, f"{base_name}-{counter}.eml")
-            counter += 1
-            
-        with open(target_path, 'w') as f:
-            f.write(template)
-
-    # Capture modification time (mtime) before opening editor
-    initial_mtime = os.path.getmtime(target_path)
-    
-    # Configure Editor Wrapping (defaults to vim)
-    editor = os.environ.get('EDITOR', 'vim')
-    cmd = [editor]
-    
-    # Pass filetype=mail to protect diff quotes and apply custom textwidth
-    if 'vim' in editor or 'nvim' in editor:
-        cmd.extend(['-c', 'set filetype=mail', '-c', f'set textwidth={args.len}'])
-    elif 'nano' in editor:
-        cmd.extend(['-r', str(args.len)])
-        
-    cmd.append(target_path)
-    
-    subprocess.call(cmd)
-    
-    # Capture mtime after editor closes
-    final_mtime = os.path.getmtime(target_path)
-    
-    # Detect :wq (updates mtime) vs :q! (leaves mtime unchanged)
-    if initial_mtime == final_mtime:
-        print("No changes detected (discarded on exit).")
-        if is_new_draft:
-            os.remove(target_path)
-            print("Draft deleted.")
+    try:
+        if args.resume:
+            target_path = validate_resume_path(Path(args.resume).expanduser())
+            print(f"Resuming draft: {target_path}")
         else:
-            print("Existing draft left untouched.")
-        sys.exit(0)
-        
-    print(f"Draft saved to {target_path}")
-    
-    # Execution
-    if args.reply:
-        print("Handing off to git send-email...")
-        subprocess.call(['git', 'send-email', '--assume-yes', target_path])
-        print("Done.")
+            is_new_draft = True
+            message = load_message_from_source(args.source)
+            template, subject, message_id = build_reply_template(message)
+
+            save_dir = get_save_directory()
+            target_path = choose_draft_path(save_dir, subject, message_id)
+            target_path.write_text(template, encoding="utf-8", newline="\n")
+
+        initial_signature = read_file_signature(target_path)
+        editor_command = build_editor_command(None, args.line_length, target_path)
+        editor_result = subprocess.run(editor_command, check=False)
+        if editor_result.returncode != 0:
+            raise RmboxError(
+                f"editor exited with status {editor_result.returncode}; draft remains at '{target_path}'"
+            )
+
+        final_signature = read_file_signature(target_path)
+        if initial_signature == final_signature:
+            print("No changes detected (discarded on exit).")
+            if is_new_draft:
+                target_path.unlink(missing_ok=True)
+                print("Draft deleted.")
+            else:
+                print("Existing draft left untouched.")
+            return 0
+
+        print(f"Draft saved to {target_path}")
+
+        if args.reply:
+            print("Handing off to git send-email...")
+            send_result = subprocess.run(
+                ["git", "send-email", "--assume-yes", str(target_path)],
+                check=False,
+            )
+            if send_result.returncode != 0:
+                raise RmboxError(f"git send-email failed with status {send_result.returncode}")
+            print("Done.")
+
+        return 0
+    except RmboxError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
