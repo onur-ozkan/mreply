@@ -1,0 +1,19 @@
+From: Onur Example <onur@example.com>
+To: Bob Example <bob@example.com>
+Subject: Multipart patch
+Message-ID: <message-2@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=abc123
+
+--abc123
+Content-Type: text/plain; charset=utf-8
+
+visible text
+
+--abc123
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename=note.txt
+
+attachment text
+
+--abc123--

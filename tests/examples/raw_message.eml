@@ -1,0 +1,10 @@
+From: Onur Example <onur@example.com>
+To: Bob Example <bob@example.com>
+Cc: Carol Example <carol@example.com>, Bob Example <bob@example.com>
+Subject: Patch 1
+Message-ID: <message-1@example.com>
+References: <thread-root@example.com>
+Content-Type: text/plain; charset=utf-8
+
+Hello world
+second line

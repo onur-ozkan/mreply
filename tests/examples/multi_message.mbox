@@ -1,0 +1,16 @@
+From onur@example.com Thu Jan  1 00:00:00 1970
+From: Onur Example <onur@example.com>
+To: Bob Example <bob@example.com>
+Subject: Patch 1
+Message-ID: <message-1@example.com>
+Content-Type: text/plain; charset=utf-8
+
+Hello world
+From onur@example.com Thu Jan  1 00:00:01 1970
+From: Onur Example <onur@example.com>
+To: Bob Example <bob@example.com>
+Subject: Patch 2
+Message-ID: <message-2@example.com>
+Content-Type: text/plain; charset=utf-8
+
+Second message
