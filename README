@@ -1,0 +1,91 @@
+mreply
+=====
+
+Why?
+-----
+
+mreply exists because replying to patches from mailing lists is often slow
+and annoying, especially when those patches do not land directly in your
+inbox.
+
+The current tool is a small wrapper around a simpler workflow: give it a
+raw message file, a raw message URL or a single-message mbox, open the
+generated reply in your editor and then either keep the saved draft or
+send it with git send-email.
+
+Requirements
+-----
+
+You need Python 3.
+
+If you want to use --reply, you also need git send-email.
+
+You also need a terminal editor such as vim, nvim, nano, or any editor
+exposed through VISUAL or EDITOR.
+
+Behavior
+-----
+
+It accepts either a raw RFC 5322 message or a single-message mbox source.
+
+It rejects multi-message mbox files so replies stay unambiguous.
+
+It opens the generated reply draft in your editor, which defaults to vim
+unless VISUAL or EDITOR is set.
+
+It prefers visible text/plain content and skips text/plain attachments
+when quoting.
+
+It stores drafts under ~/.mreply/YYYY-MM-DD/.
+
+If you save changes and exit, it keeps the draft and with --reply flag,
+invokes git send-email.
+
+Editor handling
+-----
+
+It uses VISUAL, then EDITOR then falls back to vim.
+
+It parses editor commands like code --wait correctly.
+
+It applies mail-friendly wrapping settings for vim and nvim.
+
+It applies -r wrapping for nano.
+
+Usage
+-----
+
+Saving is the default behavior. If you do not pass --reply, mreply creates
+or resumes the draft and leaves it on disk after a saved edit.
+
+Draft a reply from a raw message file:
+
+    mreply /path/to/message.eml
+
+Draft a reply from a single-message mbox file:
+
+    mreply /path/to/message.mbox
+
+Draft a reply from a URL:
+
+    mreply https://lore.kernel.org/all/20260403-some-random-patch/raw
+
+Resume an existing draft:
+
+    mreply --resume ~/.mreply/2026-04-03/Re-example-123456.eml
+
+Send the reply with git send-email after saving:
+
+    mreply --reply https://lore.kernel.org/all/20260403-some-random-patch/raw
+
+Help
+-----
+
+Show the command help:
+
+    python3 mreply.py --help
+
+TODO
+-----
+
+Currently, only Vim and Neovim have been tested. Feedback on other terminals would be greatly appreciated to help support them.
