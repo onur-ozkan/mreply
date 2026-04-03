@@ -104,7 +104,7 @@ def message_part_to_text(part):
     if hasattr(part, "get_content"):
         try:
             content = part.get_content()
-        except LookupError, UnicodeDecodeError:
+        except (LookupError, UnicodeDecodeError):
             content = None
         if isinstance(content, str):
             return content
@@ -387,7 +387,8 @@ def main(argv=None):
         editor_result = subprocess.run(editor_command, check=False)
         if editor_result.returncode != 0:
             raise MreplyError(
-                f"editor exited with status {editor_result.returncode}; draft remains at '{target_path}'"
+                "editor exited with status "
+                f"{editor_result.returncode}; draft remains at '{target_path}'"
             )
 
         final_signature = read_file_signature(target_path)
