@@ -18,13 +18,13 @@ import urllib.error
 import urllib.request
 
 
-USER_AGENT = "rmbox/0.1"
+USER_AGENT = "mreply/0.1"
 DEFAULT_LINE_LENGTH = 100
 HEADER_NEWLINE_RE = re.compile(r"[\r\n]+")
 
 
-class RmboxError(Exception):
-    """Raised when rmbox cannot complete the requested operation."""
+class MreplyError(Exception):
+    """Raised when mreply cannot complete the requested operation."""
 
 
 def sanitize_header_value(value):
@@ -43,24 +43,24 @@ def fetch_source_bytes(source):
             with urllib.request.urlopen(request) as response:
                 return response.read()
         except urllib.error.URLError as error:
-            raise RmboxError(f"unable to fetch URL '{source}': {error}") from error
+            raise MreplyError(f"unable to fetch URL '{source}': {error}") from error
 
     source_path = Path(source).expanduser()
     print(f"Reading from file: {source_path}...")
     if not source_path.exists():
-        raise RmboxError(f"file '{source_path}' does not exist")
+        raise MreplyError(f"file '{source_path}' does not exist")
 
     try:
         return source_path.read_bytes()
     except OSError as error:
-        raise RmboxError(f"unable to read file '{source_path}': {error}") from error
+        raise MreplyError(f"unable to read file '{source_path}': {error}") from error
 
 
 def parse_messages_from_bytes(data):
     """Parse either a raw email message or an mbox payload."""
 
     if not data.strip():
-        raise RmboxError("source is empty")
+        raise MreplyError("source is empty")
 
     if data.startswith(b"From "):
         with tempfile.NamedTemporaryFile(delete=False) as temp_file:
@@ -89,10 +89,10 @@ def load_message_from_source(source):
 
     messages = parse_messages_from_bytes(fetch_source_bytes(source))
     if not messages:
-        raise RmboxError("source does not contain any messages")
+        raise MreplyError("source does not contain any messages")
     if len(messages) > 1:
-        raise RmboxError(
-            "source contains multiple messages; rmbox replies to one message at a time, "
+        raise MreplyError(
+            "source contains multiple messages; mreply replies to one message at a time, "
             "so provide a raw message or a single-message mbox"
         )
     return messages[0]
@@ -222,7 +222,7 @@ def build_reply_template(message, local_addresses=None):
 
     reply_to = sanitize_header_value(message.get("From", ""))
     if not reply_to:
-        raise RmboxError("source message is missing a From header")
+        raise MreplyError("source message is missing a From header")
 
     headers = [f"To: {reply_to}"]
     local_address_set = set(local_addresses or get_local_addresses())
@@ -274,10 +274,10 @@ def make_draft_filename(subject, message_id=""):
 
 
 def get_save_directory(today=None):
-    """Create and return the per-day draft directory under ~/.rmbox/."""
+    """Create and return the per-day draft directory under ~/.mreply/."""
 
     date_token = today or datetime.now().strftime("%Y-%m-%d")
-    draft_dir = Path.home() / ".rmbox" / date_token
+    draft_dir = Path.home() / ".mreply" / date_token
     draft_dir.mkdir(parents=True, exist_ok=True)
     return draft_dir
 
@@ -309,10 +309,10 @@ def build_editor_command(editor_value, line_length, target_path):
     try:
         command = shlex.split(editor)
     except ValueError as error:
-        raise RmboxError(f"unable to parse editor command '{editor}': {error}") from error
+        raise MreplyError(f"unable to parse editor command '{editor}': {error}") from error
 
     if not command:
-        raise RmboxError("editor command is empty")
+        raise MreplyError("editor command is empty")
 
     executable = Path(command[0]).name.lower()
     if "vim" in executable:
@@ -325,12 +325,12 @@ def build_editor_command(editor_value, line_length, target_path):
 
 
 def validate_resume_path(resume_path):
-    """Validate that a resume target looks like an rmbox draft."""
+    """Validate that a resume target looks like a mreply draft."""
 
     if not resume_path.exists():
-        raise RmboxError(f"draft '{resume_path}' does not exist")
+        raise MreplyError(f"draft '{resume_path}' does not exist")
     if resume_path.suffix.lower() != ".eml":
-        raise RmboxError(f"draft '{resume_path}' is not an .eml file")
+        raise MreplyError(f"draft '{resume_path}' is not an .eml file")
     return resume_path
 
 
@@ -386,7 +386,7 @@ def main(argv=None):
         editor_command = build_editor_command(None, args.line_length, target_path)
         editor_result = subprocess.run(editor_command, check=False)
         if editor_result.returncode != 0:
-            raise RmboxError(
+            raise MreplyError(
                 f"editor exited with status {editor_result.returncode}; draft remains at '{target_path}'"
             )
 
@@ -409,11 +409,11 @@ def main(argv=None):
                 check=False,
             )
             if send_result.returncode != 0:
-                raise RmboxError(f"git send-email failed with status {send_result.returncode}")
+                raise MreplyError(f"git send-email failed with status {send_result.returncode}")
             print("Done.")
 
         return 0
-    except RmboxError as error:
+    except MreplyError as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
 

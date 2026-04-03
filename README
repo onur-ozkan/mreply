@@ -83,7 +83,7 @@ Help
 
 Show the command help:
 
-    python3 mreply.py --help
+    mreply --help
 
 TODO
 -----
