@@ -356,6 +356,19 @@ def create_parser():
     return parser
 
 
+def send(target_path):
+    """Send a draft via git send-email."""
+
+    print("Handing off to git send-email...")
+    send_result = subprocess.run(
+        ["git", "send-email", str(target_path)],
+        check=False,
+    )
+    if send_result.returncode != 0:
+        raise MreplyError(f"git send-email failed with status {send_result.returncode}")
+    print("Done.")
+
+
 def main(argv=None):
     parser = create_parser()
     args = parser.parse_args(argv)
@@ -393,25 +406,24 @@ def main(argv=None):
 
         final_signature = read_file_signature(target_path)
         if initial_signature == final_signature:
-            print("No changes detected (discarded on exit).")
             if is_new_draft:
+                print("No changes detected (discarded on exit).")
                 target_path.unlink(missing_ok=True)
                 print("Draft deleted.")
+                return 0
+
+            if args.reply:
+                print("No changes detected; sending existing draft.")
+                send(target_path)
             else:
+                print("No changes detected (discarded on exit).")
                 print("Existing draft left untouched.")
             return 0
 
         print(f"Draft saved to {target_path}")
 
         if args.reply:
-            print("Handing off to git send-email...")
-            send_result = subprocess.run(
-                ["git", "send-email", "--assume-yes", str(target_path)],
-                check=False,
-            )
-            if send_result.returncode != 0:
-                raise MreplyError(f"git send-email failed with status {send_result.returncode}")
-            print("Done.")
+            send(target_path)
 
         return 0
     except MreplyError as error:
