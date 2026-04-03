@@ -322,14 +322,14 @@ def build_editor_command(editor_value, line_length, target_path):
     return command
 
 
-def validate_resume_path(resume_path):
-    """Validate that a resume target looks like a mreply draft."""
+def validate_draft_path(draft_path):
+    """Validate that a draft target looks like a mreply draft."""
 
-    if not resume_path.exists():
-        raise MreplyError(f"draft '{resume_path}' does not exist")
-    if resume_path.suffix.lower() != ".eml":
-        raise MreplyError(f"draft '{resume_path}' is not an .eml file")
-    return resume_path
+    if not draft_path.exists():
+        raise MreplyError(f"draft '{draft_path}' does not exist")
+    if draft_path.suffix.lower() != ".eml":
+        raise MreplyError(f"draft '{draft_path}' is not an .eml file")
+    return draft_path
 
 
 def create_parser():
@@ -341,7 +341,7 @@ def create_parser():
         nargs="?",
         help="A URL or file containing one raw email message or a single-message mbox",
     )
-    parser.add_argument("--resume", metavar="FILE", help="Re-open an existing drafted reply")
+    parser.add_argument("--draft", metavar="FILE", help="Open an existing draft")
     parser.add_argument(
         "--reply", action="store_true", help="Send the reply via git send-email on save"
     )
@@ -373,19 +373,19 @@ def main(argv=None):
     parser = create_parser()
     args = parser.parse_args(argv)
 
-    if not args.source and not args.resume:
-        parser.error("You must provide either a source URL/file or use --resume FILE.")
-    if args.source and args.resume:
-        parser.error("Cannot use both a source and --resume at the same time.")
+    if not args.source and not args.draft:
+        parser.error("You must provide either a source URL/file or use --draft FILE.")
+    if args.source and args.draft:
+        parser.error("Cannot use both a source and --draft at the same time.")
     if args.line_length < 1:
         parser.error("--line-length must be a positive integer.")
 
     is_new_draft = False
 
     try:
-        if args.resume:
-            target_path = validate_resume_path(Path(args.resume).expanduser())
-            print(f"Resuming draft: {target_path}")
+        if args.draft:
+            target_path = validate_draft_path(Path(args.draft).expanduser())
+            print(f"Opening draft: {target_path}")
         else:
             is_new_draft = True
             message = load_message_from_source(args.source)

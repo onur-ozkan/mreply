@@ -56,7 +56,7 @@ Usage
 -----
 
 Saving is the default behavior. If you do not pass --reply, mreply creates
-or resumes the draft and leaves it on disk after a saved edit.
+or opens the draft and leaves it on disk after a saved edit.
 
 Draft a reply from a raw message file:
 
@@ -70,13 +70,17 @@ Draft a reply from a URL:
 
     mreply https://lore.kernel.org/all/20260403-some-random-patch/raw
 
-Resume an existing draft:
+Open an existing draft:
 
-    mreply --resume ~/.mreply/2026-04-03/Re-example-123456.eml
+    mreply --draft ~/.mreply/2026-04-03/Re-example-123456.eml
 
 Send the reply with git send-email after saving:
 
     mreply --reply https://lore.kernel.org/all/20260403-some-random-patch/raw
+
+Send an existing draft:
+
+    mreply --reply --draft ~/.mreply/2026-04-03/Re-example-123456.eml
 
 Help
 -----
