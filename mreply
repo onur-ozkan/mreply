@@ -19,7 +19,7 @@ import urllib.request
 
 
 USER_AGENT = "mreply/0.1"
-DEFAULT_LINE_LENGTH = 100
+DEFAULT_LINE_LENGTH = 80
 HEADER_NEWLINE_RE = re.compile(r"[\r\n]+")
 UTF8_MIME_HEADERS = [
     "MIME-Version: 1.0",
