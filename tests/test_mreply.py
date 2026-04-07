@@ -37,6 +37,9 @@ class MreplyTests(unittest.TestCase):
         self.assertNotIn("bob@example.com>, Bob Example", template)
         self.assertIn("In-Reply-To: <message-1@example.com>", template)
         self.assertIn("References: <thread-root@example.com> <message-1@example.com>", template)
+        self.assertIn("MIME-Version: 1.0", template)
+        self.assertIn("Content-Type: text/plain; charset=UTF-8", template)
+        self.assertIn("Content-Transfer-Encoding: 8bit", template)
         self.assertIn("> Hello world\n> second line", template)
 
     def test_build_reply_template_omits_empty_threading_headers(self):
@@ -55,6 +58,18 @@ class MreplyTests(unittest.TestCase):
         body = mreply.extract_plain_text_body(message)
 
         self.assertEqual(body.strip(), "visible text")
+
+    def test_extract_plain_text_body_prefers_utf8_when_charset_is_missing(self):
+        message = self.parse_message(self.load_example_bytes("utf8_no_charset.eml"))
+
+        body = mreply.extract_plain_text_body(message)
+        template, _, _ = mreply.build_reply_template(message, local_addresses={"bob@example.com"})
+
+        self.assertEqual(body.strip(), "Onur Özkan")
+        self.assertIn("MIME-Version: 1.0", template)
+        self.assertIn("Content-Type: text/plain; charset=UTF-8", template)
+        self.assertIn("Content-Transfer-Encoding: 8bit", template)
+        self.assertIn("> Onur Özkan", template)
 
     def test_load_message_from_source_supports_single_message_mbox(self):
         with tempfile.TemporaryDirectory() as temp_dir:
