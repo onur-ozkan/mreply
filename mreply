@@ -16,6 +16,7 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit, urlunsplit
 
 
 USER_AGENT = "mreply/0.1"
@@ -32,6 +33,11 @@ class MreplyError(Exception):
     """Raised when mreply cannot complete the requested operation."""
 
 
+DRAFT_SAVED = "saved"
+DRAFT_UNCHANGED = "unchanged"
+DRAFT_DISCARDED = "discarded"
+
+
 def sanitize_header_value(value):
     """Collapse header newlines and surrounding whitespace."""
 
@@ -42,6 +48,7 @@ def fetch_source_bytes(source):
     """Fetch message bytes from a URL or local file."""
 
     if source.startswith(("http://", "https://")):
+        source = normalize_source_url(source)
         print(f"Fetching from URL: {source}...")
         request = urllib.request.Request(source, headers={"User-Agent": USER_AGENT})
         try:
@@ -59,6 +66,22 @@ def fetch_source_bytes(source):
         return source_path.read_bytes()
     except OSError as error:
         raise MreplyError(f"unable to read file '{source_path}': {error}") from error
+
+
+def normalize_source_url(source):
+    """Rewrite well-known message archive URLs to raw message endpoints."""
+
+    split_url = urlsplit(source)
+    hostname = split_url.hostname.casefold() if split_url.hostname else ""
+    if hostname != "lore.kernel.org":
+        return source
+
+    normalized_path = split_url.path.rstrip("/")
+    if normalized_path.endswith("/raw"):
+        return source
+
+    raw_path = f"{normalized_path}/raw"
+    return urlunsplit((split_url.scheme, split_url.netloc, raw_path, split_url.query, ""))
 
 
 def parse_messages_from_bytes(data):
@@ -89,12 +112,19 @@ def parse_messages_from_bytes(data):
     return [parser.parsebytes(data)]
 
 
-def load_message_from_source(source):
-    """Load exactly one message from the requested source."""
+def load_messages_from_source(source):
+    """Load one or more messages from the requested source."""
 
     messages = parse_messages_from_bytes(fetch_source_bytes(source))
     if not messages:
         raise MreplyError("source does not contain any messages")
+    return messages
+
+
+def load_message_from_source(source):
+    """Load exactly one message from the requested source."""
+
+    messages = load_messages_from_source(source)
     if len(messages) > 1:
         raise MreplyError(
             "source contains multiple messages; mreply replies to one message at a time, "
@@ -344,6 +374,37 @@ def validate_draft_path(draft_path):
     return draft_path
 
 
+def edit_draft(target_path, line_length, is_new_draft, send_on_unchanged=False):
+    """Open a draft in the editor and return its resulting state."""
+
+    initial_signature = read_file_signature(target_path)
+    editor_command = build_editor_command(None, line_length, target_path)
+    editor_result = subprocess.run(editor_command, check=False)
+    if editor_result.returncode != 0:
+        raise MreplyError(
+            "editor exited with status "
+            f"{editor_result.returncode}; draft remains at '{target_path}'"
+        )
+
+    final_signature = read_file_signature(target_path)
+    if initial_signature == final_signature:
+        if is_new_draft:
+            print("No changes detected (discarded on exit).")
+            target_path.unlink(missing_ok=True)
+            print("Draft deleted.")
+            return DRAFT_DISCARDED
+
+        if send_on_unchanged:
+            print("No changes detected; sending existing draft.")
+        else:
+            print("No changes detected (discarded on exit).")
+            print("Existing draft left untouched.")
+        return DRAFT_UNCHANGED
+
+    print(f"Draft saved to {target_path}")
+    return DRAFT_SAVED
+
+
 def create_parser():
     """Create the CLI argument parser."""
 
@@ -351,7 +412,7 @@ def create_parser():
     parser.add_argument(
         "source",
         nargs="?",
-        help="A URL or file containing one raw email message or a single-message mbox",
+        help="A URL or file containing one raw email message or an mbox with one or more messages",
     )
     parser.add_argument("--draft", metavar="FILE", help="Open an existing draft")
     parser.add_argument(
@@ -368,12 +429,19 @@ def create_parser():
     return parser
 
 
-def send(target_path):
-    """Send a draft via git send-email."""
+def send(target_paths):
+    """Send one or more drafts via git send-email."""
 
-    print("Handing off to git send-email...")
+    if not target_paths:
+        return
+
+    target_paths = list(target_paths)
+    if len(target_paths) == 1:
+        print("Handing off to git send-email...")
+    else:
+        print(f"Handing off {len(target_paths)} drafts to git send-email...")
     send_result = subprocess.run(
-        ["git", "send-email", str(target_path)],
+        ["git", "send-email", *(str(target_path) for target_path in target_paths)],
         check=False,
     )
     if send_result.returncode != 0:
@@ -392,50 +460,44 @@ def main(argv=None):
     if args.line_length < 1:
         parser.error("--line-length must be a positive integer.")
 
-    is_new_draft = False
-
     try:
+        send_targets = []
+
         if args.draft:
             target_path = validate_draft_path(Path(args.draft).expanduser())
             print(f"Opening draft: {target_path}")
-        else:
-            is_new_draft = True
-            message = load_message_from_source(args.source)
-            template, subject, message_id = build_reply_template(message)
-
-            save_dir = get_save_directory()
-            target_path = choose_draft_path(save_dir, subject, message_id)
-            target_path.write_text(template, encoding="utf-8", newline="\n")
-
-        initial_signature = read_file_signature(target_path)
-        editor_command = build_editor_command(None, args.line_length, target_path)
-        editor_result = subprocess.run(editor_command, check=False)
-        if editor_result.returncode != 0:
-            raise MreplyError(
-                "editor exited with status "
-                f"{editor_result.returncode}; draft remains at '{target_path}'"
+            draft_state = edit_draft(
+                target_path,
+                args.line_length,
+                is_new_draft=False,
+                send_on_unchanged=args.reply,
             )
+            if args.reply and draft_state in {DRAFT_SAVED, DRAFT_UNCHANGED}:
+                send_targets.append(target_path)
+        else:
+            messages = load_messages_from_source(args.source)
+            save_dir = get_save_directory()
+            local_addresses = get_local_addresses()
+            if len(messages) > 1:
+                print(f"Source contains {len(messages)} messages; replying to each in sequence.")
 
-        final_signature = read_file_signature(target_path)
-        if initial_signature == final_signature:
-            if is_new_draft:
-                print("No changes detected (discarded on exit).")
-                target_path.unlink(missing_ok=True)
-                print("Draft deleted.")
-                return 0
+            for index, message in enumerate(messages, start=1):
+                template, subject, message_id = build_reply_template(
+                    message,
+                    local_addresses=local_addresses,
+                )
+                target_path = choose_draft_path(save_dir, subject, message_id)
+                target_path.write_text(template, encoding="utf-8", newline="\n")
 
-            if args.reply:
-                print("No changes detected; sending existing draft.")
-                send(target_path)
-            else:
-                print("No changes detected (discarded on exit).")
-                print("Existing draft left untouched.")
-            return 0
+                if len(messages) > 1:
+                    print(f"Opening draft {index}/{len(messages)}: {target_path}")
 
-        print(f"Draft saved to {target_path}")
+                draft_state = edit_draft(target_path, args.line_length, is_new_draft=True)
+                if args.reply and draft_state == DRAFT_SAVED:
+                    send_targets.append(target_path)
 
         if args.reply:
-            send(target_path)
+            send(send_targets)
 
         return 0
     except MreplyError as error:

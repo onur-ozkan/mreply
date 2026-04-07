@@ -5,6 +5,7 @@ from email import policy
 from email.parser import BytesParser
 from pathlib import Path
 import unittest
+from unittest import mock
 
 
 EXAMPLES_DIR = Path(__file__).with_name("examples")
@@ -81,6 +82,15 @@ class MreplyTests(unittest.TestCase):
         self.assertEqual(message["Subject"], "Patch 1")
         self.assertEqual(message["From"], "Onur Example <onur@example.com>")
 
+    def test_load_messages_from_source_supports_multi_message_mbox(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "thread.mbox"
+            source_path.write_bytes(self.load_example_bytes("multi_message.mbox"))
+
+            messages = mreply.load_messages_from_source(str(source_path))
+
+        self.assertEqual([message["Subject"] for message in messages], ["Patch 1", "Patch 2"])
+
     def test_load_message_from_source_rejects_multi_message_mbox(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source_path = Path(temp_dir) / "thread.mbox"
@@ -88,6 +98,46 @@ class MreplyTests(unittest.TestCase):
 
             with self.assertRaises(mreply.MreplyError):
                 mreply.load_message_from_source(str(source_path))
+
+    def test_main_replies_to_multi_message_source_and_sends_after_edit_loop(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / "thread.mbox"
+            source_path.write_bytes(self.load_example_bytes("multi_message.mbox"))
+            edited_drafts = []
+            send_commands = []
+
+            def fake_run(command, check=False, capture_output=False, text=False):
+                if command[0] == "editor":
+                    draft_path = Path(command[-1])
+                    edited_drafts.append(draft_path)
+                    draft_path.write_text(
+                        draft_path.read_text(encoding="utf-8") + "\nReply body\n",
+                        encoding="utf-8",
+                        newline="\n",
+                    )
+                    return mock.Mock(returncode=0)
+
+                if command[:2] == ["git", "send-email"]:
+                    send_commands.append(command)
+                    return mock.Mock(returncode=0)
+
+                raise AssertionError(f"unexpected command: {command}")
+
+            with mock.patch.object(
+                mreply,
+                "build_editor_command",
+                side_effect=lambda _editor, _line_length, target_path: ["editor", str(target_path)],
+            ):
+                with mock.patch.object(mreply, "get_local_addresses", return_value=set()):
+                    with mock.patch.object(mreply.subprocess, "run", side_effect=fake_run):
+                        with mock.patch.dict("os.environ", {"HOME": temp_dir}, clear=False):
+                            exit_code = mreply.main(["--reply", str(source_path)])
+                            self.assertTrue(all(path.exists() for path in edited_drafts))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(edited_drafts), 2)
+        self.assertEqual(len(send_commands), 1)
+        self.assertEqual(send_commands[0][2:], [str(path) for path in edited_drafts])
 
 
 if __name__ == "__main__":

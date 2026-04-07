@@ -9,9 +9,9 @@ and annoying, especially when those patches do not land directly in your
 inbox.
 
 The current tool is a small wrapper around a simpler workflow: give it a
-raw message file, a raw message URL or a single-message mbox, open the
-generated reply in your editor and then either keep the saved draft or
-send it with git send-email.
+raw message file, a raw message URL or an mbox, open the generated reply
+in your editor and then either keep the saved draft or send it with git
+send-email.
 
 Requirements
 -----
@@ -26,9 +26,10 @@ exposed through VISUAL or EDITOR.
 Behavior
 -----
 
-It accepts either a raw RFC 5322 message or a single-message mbox source.
+It accepts either a raw RFC 5322 message or an mbox source.
 
-It rejects multi-message mbox files so replies stay unambiguous.
+If the source contains multiple messages, it opens one reply draft per
+message in sequence.
 
 It opens the generated reply draft in your editor, which defaults to vim
 unless VISUAL or EDITOR is set.
@@ -62,7 +63,7 @@ Draft a reply from a raw message file:
 
     mreply /path/to/message.eml
 
-Draft a reply from a single-message mbox file:
+Draft replies from an mbox file:
 
     mreply /path/to/message.mbox
 
