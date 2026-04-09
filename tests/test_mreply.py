@@ -41,7 +41,13 @@ class MreplyTests(unittest.TestCase):
         self.assertIn("MIME-Version: 1.0", template)
         self.assertIn("Content-Type: text/plain; charset=UTF-8", template)
         self.assertIn("Content-Transfer-Encoding: 8bit", template)
-        self.assertIn("> Hello world\n> second line", template)
+        expected_quote = (
+            "On Thu, 09 Apr 2026 12:34:56 +0300\n"
+            "Onur Example <onur@example.com> wrote:\n\n"
+            "> Hello world\n"
+            "> second line"
+        )
+        self.assertIn(expected_quote, template)
 
     def test_build_reply_template_omits_empty_threading_headers(self):
         message = self.parse_message(self.load_example_bytes("no_message_id.eml"))
@@ -52,6 +58,7 @@ class MreplyTests(unittest.TestCase):
         self.assertEqual(message_id, "")
         self.assertNotIn("In-Reply-To:", template)
         self.assertNotIn("References:", template)
+        self.assertIn("Onur <onur@example.com> wrote:\n\n> Body", template)
 
     def test_extract_plain_text_body_skips_attachments(self):
         message = self.parse_message(self.load_example_bytes("multipart_message.eml"))

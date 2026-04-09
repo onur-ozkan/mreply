@@ -191,6 +191,14 @@ def quote_body(body):
     return "\n".join(f"> {line}" for line in body.splitlines())
 
 
+def build_quote_intro(message):
+    """Build the attribution line shown above quoted reply text."""
+
+    author = sanitize_header_value(message.get("From", ""))
+    message_date = sanitize_header_value(message.get("Date", ""))
+    return f"On {message_date}\n{author} wrote:"
+
+
 def normalize_addresses(header_values, exclude=None):
     """Parse, sanitize, deduplicate, and filter header addresses."""
 
@@ -291,9 +299,12 @@ def build_reply_template(message, local_addresses=None):
 
     headers.extend(UTF8_MIME_HEADERS)
 
+    quote_intro = build_quote_intro(message)
     quoted_body = quote_body(extract_plain_text_body(message))
     template = "\n".join(headers) + "\n\n"
     if quoted_body:
+        if quote_intro:
+            template += quote_intro + "\n\n"
         template += quoted_body + "\n"
 
     return template, reply_subject, message_id

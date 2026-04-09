@@ -4,6 +4,7 @@ Cc: Carol Example <carol@example.com>, Bob Example <bob@example.com>
 Subject: Patch 1
 Message-ID: <message-1@example.com>
 References: <thread-root@example.com>
+Date: Thu, 09 Apr 2026 12:34:56 +0300
 Content-Type: text/plain; charset=utf-8
 
 Hello world
