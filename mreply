@@ -419,7 +419,9 @@ def edit_draft(target_path, line_length, is_new_draft, send_on_unchanged=False):
 def create_parser():
     """Create the CLI argument parser."""
 
-    parser = argparse.ArgumentParser(description="Draft replies to email patches easily.")
+    parser = argparse.ArgumentParser(
+        description="Prepare or send email replies from a raw message, mbox or URL."
+    )
     parser.add_argument(
         "source",
         nargs="?",
